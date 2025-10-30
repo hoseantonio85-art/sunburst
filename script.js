@@ -13,11 +13,25 @@
   const detailTitle = document.getElementById('detail-title');
   const detailSubtitle = document.getElementById('detail-subtitle');
 
-  // Dimensions responsive
-  const containerW = Math.min(980, Math.max(600, Math.floor(wrap.clientWidth * 0.98)));
-  const width = containerW;
-  const height = width;
-  const radius = Math.min(width, height) / 3.8;
+  // Responsive dimensions - исправленный расчет
+  const getContainerDimensions = () => {
+    const containerWidth = wrap.clientWidth;
+    const containerHeight = wrap.clientHeight || containerWidth * 0.9; // если высота не задана
+    
+    // Берем минимальное значение для квадратного графика
+    const size = Math.min(containerWidth, containerHeight); // 90% от минимального размера
+    
+    return {
+      width: size,
+      height: size,
+      radius: size / 6 // уменьшаем радиус для гарантированного вписывания
+    };
+  };
+
+  const dimensions = getContainerDimensions();
+  const width = dimensions.width;
+  const height = dimensions.height;
+  const radius = dimensions.radius;
 
   // Color by level mapping
   const colorLevel = {
@@ -46,14 +60,18 @@
     .innerRadius(d => d.y0 * radius)
     .outerRadius(d => Math.max(d.y0 * radius, d.y1 * radius - 1));
 
-  // create svg
+  // create svg с исправленными размерами
   const svg = d3.create("svg")
-    .attr("viewBox", [-width / 2, -height / 2, width, width])
-    .style("font", "11px Inter, sans-serif");
+    .attr("width", width)
+    .attr("height", height)
+    .attr("viewBox", [-width / 2, -height / 2, width, height])
+    .style("font", "11px Inter, sans-serif")
+    .style("max-width", "100%") // гарантируем вписывание
+    .style("display", "block"); // убираем лишние отступы
 
   const g = svg.append("g");
 
-  // draw paths
+  // draw paths - ИСПРАВЛЕНА ЛОГИКА ВИДИМОСТИ
   const path = g.selectAll("path")
     .data(root.descendants().slice(1))
     .join("path")
@@ -72,17 +90,20 @@
         while (top.depth > 1) top = top.parent;
         return fallback(top.data.name);
       })
-      .attr("fill-opacity", d => (d.depth === 1 ? (d.children ? 0.8 : 0.6) : 0))
-      .attr("pointer-events", d => (d.depth === 1 ? "auto" : "none"))
+      // ИСПРАВЛЕНО: правильная логика прозрачности и pointer-events для начального состояния
+      .attr("fill-opacity", d => arcVisible(d.current) ? (d.children ? 0.8 : 0.6) : 0)
+      .attr("pointer-events", d => arcVisible(d.current) ? "auto" : "none")
       .attr("d", d => arc(d.current));
 
-  // pointer cursor for clickable
-  path.filter(d => d.children).style("cursor", "pointer").on("click", clicked);
+  // pointer cursor for clickable - ИСПРАВЛЕНО: применяем только к видимым элементам с детьми
+  path.filter(d => d.children && arcVisible(d.current))
+      .style("cursor", "pointer")
+      .on("click", clicked);
 
   // tooltip titles for accessibility
   path.append("title").text(d => `${d.ancestors().map(a=>a.data.name).reverse().join(" / ")}\n${d.value}`);
 
-  // labels
+  // labels - ИСПРАВЛЕНО: используем правильную логику видимости
   const label = svg.append("g")
     .attr("pointer-events", "none")
     .attr("text-anchor", "middle")
@@ -106,24 +127,54 @@
   wrap.innerHTML = '';
   wrap.appendChild(svg.node());
 
+  // Обработчик изменения размера окна
+  window.addEventListener('resize', () => {
+    const newDimensions = getContainerDimensions();
+    const newWidth = newDimensions.width;
+    const newHeight = newDimensions.height;
+    const newRadius = newDimensions.radius;
+    
+    // Обновляем размеры SVG
+    svg
+      .attr("width", newWidth)
+      .attr("height", newHeight)
+      .attr("viewBox", [-newWidth / 2, -newHeight / 2, newWidth, newHeight]);
+    
+    // Обновляем arc с новым радиусом
+    arc
+      .innerRadius(d => d.y0 * newRadius)
+      .outerRadius(d => Math.max(d.y0 * newRadius, d.y1 * newRadius - 1));
+    
+    // Обновляем родительский круг
+    parent.attr("r", newRadius);
+    
+    // Перерисовываем пути
+    path.attr("d", d => arc(d.current));
+    
+    // Обновляем позиции меток
+    label
+      .attr("transform", d => labelTransform(d.current));
+  });
+
   // current focused
   let currentNode = root;
 
   // initial details empty
   Details.renderEmpty();
 
-  // interactions: tooltip on hover
-  path.on("mousemove", (event, d) => {
-    const [mx,my] = d3.pointer(event, wrap);
-    const name = d.data.name;
-    const lvl = d.data.level || dominantLevel(d) || '—';
-    const losses = sumLosses(d);
-    tooltip.style.display = 'block';
-    tooltip.style.left = (event.clientX + 12) + 'px';
-    tooltip.style.top = (event.clientY + 12) + 'px';
-    tooltip.innerHTML = `<div style="font-weight:600">${name}</div><div class="muted" style="margin-top:6px">Уровень: ${lvl}</div><div style="margin-top:6px;font-weight:600">${losses.toLocaleString('ru-RU')} ₽</div>`;
-  });
-  path.on("mouseleave", ()=> tooltip.style.display = 'none');
+  // interactions: tooltip on hover - ИСПРАВЛЕНО: применяем только к видимым элементам
+  path.filter(d => arcVisible(d.current))
+      .on("mousemove", (event, d) => {
+        const [mx,my] = d3.pointer(event, wrap);
+        const name = d.data.name;
+        const lvl = d.data.level || dominantLevel(d) || '—';
+        const losses = sumLosses(d);
+        tooltip.style.display = 'block';
+        tooltip.style.left = (event.clientX + 12) + 'px';
+        tooltip.style.top = (event.clientY + 12) + 'px';
+        tooltip.innerHTML = `<div style="font-weight:600">${name}</div><div class="muted" style="margin-top:6px">Уровень: ${lvl}</div><div style="margin-top:6px;font-weight:600">${losses.toLocaleString('ru-RU')} ₽</div>`;
+      })
+      .on("mouseleave", () => tooltip.style.display = 'none');
 
   function sumLosses(node){
     let s = 0;
@@ -166,21 +217,38 @@
 
     const t = svg.transition().duration(event && event.altKey ? 7500 : 750);
 
+    // Обновляем ВСЕ пути с новой логикой видимости
     path.transition(t)
       .tween("data", d => {
         const i = d3.interpolate(d.current, d.target);
         return t => d.current = i(t);
       })
-      .filter(function(d){
-        return +this.getAttribute("fill-opacity") || arcVisible(d.target);
-      })
-        .attr("fill-opacity", d => arcVisible(d.target) ? (d.children ? 0.8 : 0.6) : 0)
-        .attr("pointer-events", d => arcVisible(d.target) ? "auto" : "none")
-        .attrTween("d", d => () => arc(d.current));
+      .attr("fill-opacity", d => arcVisible(d.target) ? (d.children ? 0.8 : 0.6) : 0)
+      .attr("pointer-events", d => arcVisible(d.target) ? "auto" : "none")
+      .attrTween("d", d => () => arc(d.current));
 
-    label.filter(function(d){
-      return +this.getAttribute("fill-opacity") || labelVisible(d.target);
-    }).transition(t)
+    // Обновляем обработчики для кликабельных элементов
+    path.filter(d => d.children)
+        .style("cursor", d => arcVisible(d.target) ? "pointer" : "none")
+        .on("click", d => arcVisible(d.target) ? clicked(event, d) : null);
+
+    // Обновляем обработчики для тултипов
+    path.on("mousemove", null)
+        .on("mouseleave", null);
+        
+    path.filter(d => arcVisible(d.target))
+        .on("mousemove", (event, d) => {
+          const name = d.data.name;
+          const lvl = d.data.level || dominantLevel(d) || '—';
+          const losses = sumLosses(d);
+          tooltip.style.display = 'block';
+          tooltip.style.left = (event.clientX + 12) + 'px';
+          tooltip.style.top = (event.clientY + 12) + 'px';
+          tooltip.innerHTML = `<div style="font-weight:600">${name}</div><div class="muted" style="margin-top:6px">Уровень: ${lvl}</div><div style="margin-top:6px;font-weight:600">${losses.toLocaleString('ru-RU')} ₽</div>`;
+        })
+        .on("mouseleave", () => tooltip.style.display = 'none');
+
+    label.transition(t)
       .attr("fill-opacity", d => +labelVisible(d.target))
       .attrTween("transform", d => () => labelTransform(d.current));
   }
@@ -188,9 +256,11 @@
   function arcVisible(d){
     return d.y1 <= 3 && d.y0 >= 1 && d.x1 > d.x0;
   }
+  
   function labelVisible(d){
     return d.y1 <= 3 && d.y0 >= 1 && (d.y1 - d.y0) * (d.x1 - d.x0) > 0.03;
   }
+  
   function labelTransform(d){
     const x = (d.x0 + d.x1)/2 * 180 / Math.PI;
     const y = (d.y0 + d.y1)/2 * radius;
